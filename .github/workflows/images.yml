@@ -1,0 +1,39 @@
+name: Docker images
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  caddy:
+    uses: ./.github/workflows/caddy.yml
+    permissions:
+      contents: read
+      packages: write
+
+  lazydocker:
+    uses: ./.github/workflows/lazydocker.yml
+    permissions:
+      contents: read
+      packages: write
+
+  image-checks:
+    needs: [caddy, lazydocker]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all image workflows to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -e 'length > 0 and all(.[]; .result == "success")' <<< "$RESULTS" ||
+            { echo "::error::An image workflow failed, was cancelled, or was skipped"; exit 1; }
