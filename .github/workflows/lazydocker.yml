@@ -1,10 +1,8 @@
 name: LazyDocker image
 
 on:
+  workflow_call:
   workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
 
 permissions:
   contents: read
@@ -20,6 +18,8 @@ jobs:
   prepare:
     name: LazyDocker source
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.image.outputs.version }}
       source: ${{ steps.image.outputs.source }}
@@ -45,11 +45,12 @@ jobs:
           printf 'version=%s\nsource=%s\nimage=%s\ntag=%s-%s\n' \
             "${LAZYDOCKER_VERSION#v}" "$source" "$image" "${LAZYDOCKER_VERSION#v}" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
-  image-build:
-    name: LazyDocker (${{ matrix.arch }})
+  build:
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -90,13 +91,15 @@ jobs:
           docker run --rm --platform "linux/$ARCH" --entrypoint docker lazydocker:check --version
 
   lazydocker-build:
-    needs: image-build
+    needs: build
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Require both architectures to pass
         env:
-          RESULT: ${{ needs.image-build.result }}
+          RESULT: ${{ needs.build.result }}
         run: |
           [[ "$RESULT" == "success" ]] ||
             { echo "::error::LazyDocker architecture builds or smoke tests did not pass: $RESULT"; exit 1; }
