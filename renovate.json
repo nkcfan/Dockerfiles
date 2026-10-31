@@ -24,6 +24,16 @@
       "depNameTemplate": "caddy-dns/dynu",
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github\\/workflows\\/lazydocker\\.yml$/"],
+      "matchStrings": [
+        "(?:^|\\n)[ \\t]+LAZYDOCKER_VERSION:[ \\t]+(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)(?:\\r?\\n|$)"
+      ],
+      "depNameTemplate": "jesseduffield/lazydocker",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
@@ -38,6 +48,10 @@
     {
       "matchPackageNames": ["caddy", "caddy-dns/dynu"],
       "groupName": "Caddy runtime dependencies"
+    },
+    {
+      "matchPackageNames": ["jesseduffield/lazydocker"],
+      "allowedVersions": "/^v[0-9]+\\.[0-9]+\\.[0-9]+$/"
     }
   ]
 }

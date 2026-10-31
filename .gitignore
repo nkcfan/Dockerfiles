@@ -4,3 +4,4 @@
 !.env.example
 caddy/caddy-config/
 caddy/caddy-data/
+lazydocker/config/
