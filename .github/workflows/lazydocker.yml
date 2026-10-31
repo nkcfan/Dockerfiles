@@ -1,0 +1,163 @@
+name: LazyDocker image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  LAZYDOCKER_VERSION: v0.25.2
+
+concurrency:
+  group: lazydocker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: LazyDocker source
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.image.outputs.version }}
+      source: ${{ steps.image.outputs.source }}
+      image: ${{ steps.image.outputs.image }}
+      tag: ${{ steps.image.outputs.tag }}
+    steps:
+      - name: Validate release pin
+        run: |
+          [[ "$LAZYDOCKER_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+            { echo "::error::Workflow must pin one stable LAZYDOCKER_VERSION"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: jesseduffield/lazydocker
+          ref: refs/tags/${{ env.LAZYDOCKER_VERSION }}
+          persist-credentials: false
+      - name: Set source and image tags
+        id: image
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          source="$(git rev-parse HEAD)"
+          image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/lazydocker"
+          printf 'version=%s\nsource=%s\nimage=%s\ntag=%s-%s\n' \
+            "${LAZYDOCKER_VERSION#v}" "$source" "$image" "${LAZYDOCKER_VERSION#v}" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+  image-build:
+    name: LazyDocker (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: https://github.com/jesseduffield/lazydocker.git#${{ needs.prepare.outputs.source }}
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            GOARCH=${{ matrix.arch }}
+            VERSION=${{ needs.prepare.outputs.version }}
+            VCS_REF=${{ needs.prepare.outputs.source }}
+          load: true
+          push: false
+          tags: lazydocker:check
+          cache-from: type=gha,scope=lazydocker-${{ matrix.arch }}
+          cache-to: type=gha,scope=lazydocker-${{ matrix.arch }},mode=max
+      - name: Smoke test image
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE: ${{ needs.prepare.outputs.source }}
+        run: |
+          image_arch="$(docker image inspect lazydocker:check --format '{{.Architecture}}')"
+          [[ "$image_arch" == "$ARCH" ]] ||
+            { echo "::error::Image architecture is $image_arch, expected $ARCH"; exit 1; }
+          output="$(docker run --rm --platform "linux/$ARCH" lazydocker:check --version)"
+          printf '%s\n' "$output"
+          grep -Eq "(^|[[:space:]])${VERSION//./\\.}($|[[:space:]])" <<< "$output"
+          grep -Fx "Commit: $SOURCE" <<< "$output"
+          grep -Fx "OS: linux" <<< "$output"
+          grep -Fx "Arch: $ARCH" <<< "$output"
+          docker run --rm --platform "linux/$ARCH" --entrypoint docker lazydocker:check --version
+
+  lazydocker-build:
+    needs: image-build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both architectures to pass
+        env:
+          RESULT: ${{ needs.image-build.result }}
+        run: |
+          [[ "$RESULT" == "success" ]] ||
+            { echo "::error::LazyDocker architecture builds or smoke tests did not pass: $RESULT"; exit 1; }
+
+  publish-architecture:
+    name: LazyDocker publish (${{ matrix.arch }})
+    needs: [prepare, lazydocker-build]
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: https://github.com/jesseduffield/lazydocker.git#${{ needs.prepare.outputs.source }}
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            GOARCH=${{ matrix.arch }}
+            VERSION=${{ needs.prepare.outputs.version }}
+            VCS_REF=${{ needs.prepare.outputs.source }}
+          push: true
+          tags: ${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.tag }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=lazydocker-${{ matrix.arch }}
+
+  publish:
+    name: LazyDocker publish manifest
+    needs: [prepare, publish-architecture]
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-architecture tags
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:$TAG" --tag "$IMAGE:latest" \
+            "$IMAGE:$TAG-amd64" "$IMAGE:$TAG-arm64"
