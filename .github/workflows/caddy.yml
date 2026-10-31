@@ -53,7 +53,7 @@ jobs:
           version="$(sed -n 's/^ARG CADDY_VERSION=//p' caddy/Dockerfile)"
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
             { echo "::error::Dockerfile must pin one stable CADDY_VERSION"; exit 1; }
-          image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/caddy-dynu"
+          image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/caddy"
           printf 'image=%s\ntag=%s-%s\n' "$image" "$version" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
