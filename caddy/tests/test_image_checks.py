@@ -1,7 +1,9 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +16,32 @@ SPEC.loader.exec_module(checks)
 
 
 class ImageCheckTests(unittest.TestCase):
+    def test_filesystem_comparison_excludes_only_binary_content_and_container_files(self):
+        def inventory(caddy=b"binary", asset=b"asset", mode=0o755):
+            with io.BytesIO() as data:
+                with tarfile.open(fileobj=data, mode="w") as archive:
+                    for path, content in (
+                        ("usr/bin/caddy", caddy),
+                        ("usr/share/caddy/index.html", asset),
+                        ("etc/hostname", caddy),
+                    ):
+                        info = tarfile.TarInfo(path)
+                        info.mode = mode
+                        info.size = len(content)
+                        archive.addfile(info, io.BytesIO(content))
+                data.seek(0)
+                with tarfile.open(fileobj=data) as archive:
+                    return checks.filesystem_inventory(archive)
+
+        original = inventory()
+        checks.compare_filesystems(inventory(caddy=b"source-built binary"), original)
+        with self.assertRaisesRegex(ValueError, "usr/share/caddy/index.html"):
+            checks.compare_filesystems(inventory(asset=b"changed"), original)
+        with self.assertRaisesRegex(ValueError, "usr/bin/caddy"):
+            checks.compare_filesystems(inventory(mode=0o777), original)
+        with self.assertRaisesRegex(ValueError, "extra"):
+            checks.compare_filesystems({**original, "extra": ()}, original)
+
     def test_only_our_provenance_label_is_excluded(self):
         baseline = {"Labels": {"upstream": "kept"}, "Cmd": ["caddy", "run"]}
         source = {
@@ -101,7 +129,9 @@ class ImageCheckTests(unittest.TestCase):
                         return metadata["caddy"] + " test-build\n"
                     return "matching inventory"
 
-                with patch.object(checks, "docker", side_effect=inspect):
+                with patch.object(checks, "docker", side_effect=inspect), patch.object(
+                    checks, "image_filesystem", return_value={}
+                ):
                     with patch.object(checks, "image_output", side_effect=output):
                         with patch.object(checks, "smoke_test") as smoke:
                             if valid:

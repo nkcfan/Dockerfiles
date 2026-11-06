@@ -2,10 +2,12 @@
 """Compare a source-built image with locally built upstream packaging."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import ssl
 import subprocess
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -22,6 +24,49 @@ def docker(*args):
 
 def image_output(image, *args):
     return docker("run", "--rm", "--network", "none", image, *args)
+
+
+def image_filesystem(image):
+    container = docker("create", image).strip()
+    try:
+        with tempfile.TemporaryFile() as archive:
+            subprocess.run(["docker", "export", container], stdout=archive, check=True)
+            archive.seek(0)
+            with tarfile.open(fileobj=archive) as filesystem:
+                return filesystem_inventory(filesystem)
+    finally:
+        docker("rm", "--volumes", container)
+
+
+def filesystem_inventory(filesystem):
+    inventory = {}
+    # Docker supplies these per container, not from the image payload.
+    container_files = {".dockerenv", "etc/hostname", "etc/hosts", "etc/resolv.conf"}
+    for member in filesystem:
+        path = member.name.removeprefix("./").rstrip("/")
+        if path in container_files:
+            continue
+        digest = None
+        if member.isfile() and path != "usr/bin/caddy":
+            content = filesystem.extractfile(member)
+            checksum = hashlib.sha256()
+            for block in iter(lambda: content.read(1024 * 1024), b""):
+                checksum.update(block)
+            digest = checksum.hexdigest()
+        inventory[path] = (
+            member.type, member.mode, member.uid, member.gid, member.linkname,
+            member.devmajor, member.devminor, digest,
+        )
+    return inventory
+
+
+def compare_filesystems(source, baseline):
+    differences = [
+        path for path in sorted(source.keys() | baseline.keys())
+        if source.get(path) != baseline.get(path)
+    ]
+    if differences:
+        raise ValueError(f"Runtime filesystem differs: {differences[:30]}")
 
 
 def compare_configs(source, baseline, revision):
@@ -117,6 +162,7 @@ def validate(image, baseline, metadata):
     compare_configs(
         source_info["Config"], baseline_info["Config"], metadata["upstream_revision"]
     )
+    compare_filesystems(image_filesystem(image), image_filesystem(baseline))
     inventory = (
         "apk info -vv | sort; "
         "sha256sum /etc/caddy/Caddyfile /usr/share/caddy/index.html "

@@ -53,6 +53,10 @@ applied in the final stage after the binary is copied.
 [The workflow](../.github/workflows/caddy.yml) builds and tests natively on Linux
 amd64 and arm64. It compares image configuration, packages, bundled assets,
 permissions, capabilities, versions, and module inventory with upstream packaging.
+It also compares the exported root filesystem: file contents, types, ownership,
+permissions, and symlink targets must match. Only Caddy's binary contents (rebuilt
+from source) and Docker-generated hostname/hosts/resolver files are excluded;
+timestamps are not compared. Caddy binary permissions and capabilities are still checked.
 It also tests HTTP serving, internal-CA HTTPS, restart persistence, and absence of
 build tools in the runtime image.
 
