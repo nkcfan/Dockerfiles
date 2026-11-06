@@ -56,7 +56,9 @@ permissions, capabilities, versions, and module inventory with upstream packagin
 It also compares the exported root filesystem: file contents, types, ownership,
 permissions, and symlink targets must match. Only Caddy's binary contents (rebuilt
 from source) and Docker-generated hostname/hosts/resolver files are excluded;
-timestamps are not compared. Caddy binary permissions and capabilities are still checked.
+timestamps are not compared. APK's logged command timestamp is normalized, but
+its commands, package versions, and other log contents must still match.
+Caddy binary permissions and capabilities are still checked.
 It also tests HTTP serving, internal-CA HTTPS, restart persistence, and absence of
 build tools in the runtime image.
 

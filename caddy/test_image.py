@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import ssl
 import subprocess
 import tarfile
@@ -50,8 +51,15 @@ def filesystem_inventory(filesystem):
         if member.isfile() and path != "usr/bin/caddy":
             content = filesystem.extractfile(member)
             checksum = hashlib.sha256()
-            for block in iter(lambda: content.read(1024 * 1024), b""):
-                checksum.update(block)
+            if path == "var/log/apk.log":
+                checksum.update(re.sub(
+                    rb"(?m)^(Running `[^`\r\n]+` at )\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$",
+                    rb"\1<BUILD_TIME>",
+                    content.read(),
+                ))
+            else:
+                for block in iter(lambda: content.read(1024 * 1024), b""):
+                    checksum.update(block)
             digest = checksum.hexdigest()
         inventory[path] = (
             member.type, member.mode, member.uid, member.gid, member.linkname,

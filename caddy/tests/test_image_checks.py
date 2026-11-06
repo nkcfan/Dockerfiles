@@ -17,13 +17,17 @@ SPEC.loader.exec_module(checks)
 
 class ImageCheckTests(unittest.TestCase):
     def test_filesystem_comparison_excludes_only_binary_content_and_container_files(self):
-        def inventory(caddy=b"binary", asset=b"asset", mode=0o755):
+        def inventory(
+            caddy=b"binary", asset=b"asset", mode=0o755,
+            apk_log=b"Running `apk add curl` at 2026-11-05 19:37:06\nInstalling curl (1.0)\n",
+        ):
             with io.BytesIO() as data:
                 with tarfile.open(fileobj=data, mode="w") as archive:
                     for path, content in (
                         ("usr/bin/caddy", caddy),
                         ("usr/share/caddy/index.html", asset),
                         ("etc/hostname", caddy),
+                        ("var/log/apk.log", apk_log),
                     ):
                         info = tarfile.TarInfo(path)
                         info.mode = mode
@@ -35,6 +39,13 @@ class ImageCheckTests(unittest.TestCase):
 
         original = inventory()
         checks.compare_filesystems(inventory(caddy=b"source-built binary"), original)
+        checks.compare_filesystems(inventory(
+            apk_log=b"Running `apk add curl` at 2026-11-06 07:50:00\nInstalling curl (1.0)\n",
+        ), original)
+        with self.assertRaisesRegex(ValueError, "var/log/apk.log"):
+            checks.compare_filesystems(inventory(
+                apk_log=b"Running `apk add curl` at 2026-11-06 07:50:00\nInstalling curl (2.0)\n",
+            ), original)
         with self.assertRaisesRegex(ValueError, "usr/share/caddy/index.html"):
             checks.compare_filesystems(inventory(asset=b"changed"), original)
         with self.assertRaisesRegex(ValueError, "usr/bin/caddy"):
