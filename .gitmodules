@@ -1,0 +1,4 @@
+[submodule "caddy/upstream"]
+	path = caddy/upstream
+	url = https://github.com/caddyserver/caddy-docker.git
+	branch = master
