@@ -138,11 +138,15 @@ def smoke_test(image):
         ).strip()
         try:
             docker("start", container)
-            ports = json.loads(docker("inspect", container))[0]["NetworkSettings"]["Ports"]
-            http_port = ports["80/tcp"][0]["HostPort"]
-            https_port = ports["443/tcp"][0]["HostPort"]
-            http = f"http://127.0.0.1:{http_port}/"
-            https = f"https://localhost:{https_port}/"
+
+            def endpoints():
+                ports = json.loads(docker("inspect", container))[0]["NetworkSettings"]["Ports"]
+                return (
+                    f'http://127.0.0.1:{ports["80/tcp"][0]["HostPort"]}/',
+                    f'https://localhost:{ports["443/tcp"][0]["HostPort"]}/',
+                )
+
+            http, https = endpoints()
             wait_for_body(http, welcome, container)
             certificate = docker(
                 "exec", container, "cat", "/data/caddy/pki/authorities/local/root.crt"
@@ -150,6 +154,8 @@ def smoke_test(image):
             context = ssl.create_default_context(cadata=certificate)
             wait_for_body(https, b"https-ok", container, context)
             docker("restart", container)
+            # Docker can reassign ephemeral host ports when restarting a container.
+            http, https = endpoints()
             wait_for_body(http, welcome, container)
             wait_for_body(https, b"https-ok", container, context)
             if docker(

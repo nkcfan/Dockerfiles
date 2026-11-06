@@ -86,13 +86,17 @@ class ImageCheckTests(unittest.TestCase):
                 checks.wait_for_body("http://localhost", b"expected", "container")
 
     def test_smoke_test_verifies_tls_hostname_and_cleans_up(self):
+        inspections = 0
+
         def command(*args):
+            nonlocal inspections
             if args[0] == "create":
                 return "container\n"
             if args[0] == "inspect":
+                inspections += 1
                 return json.dumps([{"NetworkSettings": {"Ports": {
-                    "80/tcp": [{"HostPort": "8080"}],
-                    "443/tcp": [{"HostPort": "8443"}],
+                    "80/tcp": [{"HostPort": str(8080 + inspections - 1)}],
+                    "443/tcp": [{"HostPort": str(8443 + inspections - 1)}],
                 }}}])
             if args[:3] == ("exec", "container", "cat"):
                 return "test certificate"
@@ -105,6 +109,8 @@ class ImageCheckTests(unittest.TestCase):
                         checks.smoke_test("image")
         context.assert_called_once_with(cadata="test certificate")
         self.assertEqual(wait.call_args_list[1].args[0], "https://localhost:8443/")
+        self.assertEqual(wait.call_args_list[2].args[0], "http://127.0.0.1:8081/")
+        self.assertEqual(wait.call_args_list[3].args[0], "https://localhost:8444/")
         self.assertEqual(wait.call_count, 4)
         docker.assert_any_call("restart", "container")
         docker.assert_any_call("exec", "container", "test", "-s", "/config/caddy/autosave.json")
