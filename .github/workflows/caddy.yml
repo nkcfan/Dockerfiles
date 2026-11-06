@@ -55,7 +55,7 @@ jobs:
             { echo "::error::Dockerfile must pin one stable CADDY_VERSION"; exit 1; }
           image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/caddy"
           printf 'image=%s\ntag=%s-%s\n' "$image" "$version" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
