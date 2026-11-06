@@ -56,6 +56,12 @@ permissions, capabilities, versions, and module inventory with upstream packagin
 It also tests HTTP serving, internal-CA HTTPS, restart persistence, and absence of
 build tools in the runtime image.
 
+For migration verification against an actual previously published image, dispatch
+the Caddy workflow on the PR branch with `reference_image` set to an immutable
+`ghcr.io/nkcfan/caddy@sha256:...` digest. Both architectures must pass the same
+metadata, payload, module-version, and runtime checks against that image. This is
+an explicit check for matching versions, not a comparison of different releases.
+
 The reusable Caddy workflow remains part of the parent `image-checks` gate.
 Default-branch builds publish the **tested images**, without rebuilding, to:
 

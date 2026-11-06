@@ -2,7 +2,17 @@ name: Caddy image
 
 on:
   workflow_call:
+    inputs:
+      reference_image:
+        description: Optional immutable original image for migration-equivalence checks
+        type: string
+        default: ''
   workflow_dispatch:
+    inputs:
+      reference_image:
+        description: Optional immutable original image for migration-equivalence checks
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -53,6 +63,17 @@ jobs:
             --tag caddy-upstream:test caddy/.build
       - name: Verify runtime equivalence, Dynu, HTTP, HTTPS, and persistence
         run: python3 caddy/test_image.py
+      - name: Verify against the original published image
+        if: inputs.reference_image != ''
+        env:
+          REFERENCE_IMAGE: ${{ inputs.reference_image }}
+        run: |
+          [[ "$REFERENCE_IMAGE" =~ ^ghcr\.io/nkcfan/caddy@sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::Reference must be an immutable digest of ghcr.io/nkcfan/caddy"; exit 1; }
+          docker pull "$REFERENCE_IMAGE"
+          python3 caddy/test_image.py --baseline "$REFERENCE_IMAGE"
+          printf 'Original-image equivalence passed (%s): `%s`\n' \
+            '${{ matrix.arch }}' "$REFERENCE_IMAGE" >> "$GITHUB_STEP_SUMMARY"
       - name: Export the tested image
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         run: docker save caddy-source:test | gzip > "$RUNNER_TEMP/caddy-${{ matrix.arch }}.tar.gz"
