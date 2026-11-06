@@ -11,6 +11,8 @@ upstream Dockerfiles at the recorded submodule commit. It uses upstream's
 release xcaddy binary to compile Caddy with the same pinned Dynu module.
 Unlike the previous binary-overlay Dockerfile, both builds explicitly restore
 the Caddy binary's low-port capability after copying it into the final stage.
+They use `cap_net_bind_service=ep`, matching the original xcaddy-built Dynu
+binary's effective/permitted capability rather than the standard runtime's `p`.
 Go/Alpine images and OS packages are still prebuilt; this is not a bootstrap of
 the entire toolchain or an offline build.
 

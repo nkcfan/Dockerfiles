@@ -85,7 +85,10 @@ def transform(builder, runtime):
     builder = builder.replace("\n", " AS source-builder\n", 1)
 
     def runtime_install(block):
-        tail = block[block.index("\tsetcap cap_net_bind_service="):]
+        # The original xcaddy-built Dynu binary carries the effective capability.
+        tail = block[block.index("\tsetcap cap_net_bind_service="):].replace(
+            "cap_net_bind_service=+p", "cap_net_bind_service=+ep"
+        )
         return (
             "COPY --from=source-builder /usr/bin/caddy /usr/bin/caddy\n\n"
             "RUN set -eux; \\\n" + tail
@@ -119,7 +122,7 @@ def generate(upstream, output, series=None):
         + f"\nRUN {caddy_command()}\n\n"
         + runtime
         + "\nCOPY --from=reference-builder /usr/bin/caddy /usr/bin/caddy\n"
-        + "RUN setcap cap_net_bind_service=+p /usr/bin/caddy\n"
+        + "RUN setcap cap_net_bind_service=+ep /usr/bin/caddy\n"
     )
     subprocess.run(
         ["git", "-C", str(upstream), "diff", "--exit-code", "HEAD", "--"],

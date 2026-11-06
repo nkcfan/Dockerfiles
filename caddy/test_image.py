@@ -2,6 +2,7 @@
 """Compare a source-built image with locally built upstream packaging."""
 
 import argparse
+import difflib
 import hashlib
 import json
 from pathlib import Path
@@ -178,16 +179,23 @@ def validate(image, baseline, metadata):
     )
     compare_filesystems(image_filesystem(image), image_filesystem(baseline))
     inventory = (
-        "apk info -vv | sort; "
+        "apk info -vv --no-network | sort; "
         "sha256sum /etc/caddy/Caddyfile /usr/share/caddy/index.html "
         "/etc/ssl/certs/ca-certificates.crt; "
         "stat -c '%a:%u:%g' /config/caddy /data/caddy /usr/bin/caddy; "
         "getcap /usr/bin/caddy"
     )
-    if image_output(image, "sh", "-ec", inventory) != image_output(
-        baseline, "sh", "-ec", inventory
-    ):
-        raise ValueError("Runtime packages, assets, permissions, or capabilities differ")
+    source_inventory = image_output(image, "sh", "-ec", inventory)
+    baseline_inventory = image_output(baseline, "sh", "-ec", inventory)
+    if source_inventory != baseline_inventory:
+        difference = "".join(difflib.unified_diff(
+            baseline_inventory.splitlines(keepends=True),
+            source_inventory.splitlines(keepends=True),
+            fromfile="baseline", tofile="source",
+        ))
+        raise ValueError(
+            "Runtime packages, assets, permissions, or capabilities differ:\n" + difference
+        )
     modules = image_output(image, "caddy", "list-modules", "--versions")
     if modules != image_output(
         baseline, "caddy", "list-modules", "--versions"

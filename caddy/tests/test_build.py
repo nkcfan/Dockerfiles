@@ -39,7 +39,7 @@ class SourceBuildTests(unittest.TestCase):
                 self.assertIn(block, generated)
         self.assertIn(
             "COPY --from=source-builder /usr/bin/caddy /usr/bin/caddy\n\n"
-            "RUN set -eux; \\\n\tsetcap cap_net_bind_service=+p /usr/bin/caddy;",
+            "RUN set -eux; \\\n\tsetcap cap_net_bind_service=+ep /usr/bin/caddy;",
             result,
         )
         self.assertNotIn("go install", runtime)
@@ -115,7 +115,7 @@ class SourceBuildTests(unittest.TestCase):
             self.assertIn("/releases/download/", baseline)
             self.assertNotIn("FROM caddy:", baseline)
             self.assertIn(f'--with "github.com/caddy-dns/dynu@{build.DYNU_VERSION}"', baseline)
-            self.assertIn("RUN setcap cap_net_bind_service=+p /usr/bin/caddy", baseline)
+            self.assertIn("RUN setcap cap_net_bind_service=+ep /usr/bin/caddy", baseline)
 
     def test_ambiguous_series_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
