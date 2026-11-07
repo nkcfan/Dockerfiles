@@ -73,14 +73,17 @@ def transform(builder, runtime):
         ),
     )
     runtime_common = replace_install(runtime, "alpine", caddy, lambda block: "")
+    builder_environment = (
+        f"\nENV CADDY_VERSION={caddy[1:]} CGO_ENABLED=0 GOTOOLCHAIN=local\n"
+    )
     result = (
         "# syntax=docker/dockerfile:1\n\n"
         + source_builder.replace("\n", " AS source-builder\n", 1)
-        + "\n"
+        + builder_environment
         + "FROM source-builder AS stock-caddy\n"
         + "RUN --mount=type=cache,target=/go/pkg/mod \\\n"
         + "    --mount=type=cache,target=/root/.cache/go-build \\\n"
-        + '    CGO_ENABLED=0 GOTOOLCHAIN=local xcaddy build "${CADDY_VERSION}" '
+        + '    xcaddy build "v${CADDY_VERSION}" '
         + "--output /usr/bin/caddy\n\n"
         + runtime_common.replace("\n", " AS runtime-common\n", 1)
         + "\n"
@@ -91,28 +94,33 @@ def transform(builder, runtime):
     if "/releases/download/" in result:
         raise ValueError("Unexpected release binary download remains in source stages")
     # BuildKit visits this release-binary stage only for the comparison target.
-    result += builder.replace("\n", " AS reference-builder\n", 1)
+    result += builder.replace("\n", " AS reference-builder\n", 1) + builder_environment
     return result, {"caddy": caddy, "xcaddy": xcaddy}
 
 
-def bake_config(output, revision):
+def bake_config(output, revision, caddy_version):
+    builder_image = f"caddy:{caddy_version}-builder"
+    runtime_image = f"caddy:{caddy_version}"
     upstream = {
         "context": str(output.resolve()),
         "dockerfile": "Upstream.Dockerfile",
     }
     contexts = {
-        "localhost/caddy-builder": "target:upstream-builder",
-        "localhost/caddy-runtime": "target:upstream-runtime",
+        builder_image: "target:upstream-builder",
+        runtime_image: "target:upstream-runtime",
     }
-    application = {"context": str(ROOT), "dockerfile": "Dockerfile"}
+    application = {
+        "context": str(ROOT), "dockerfile": "Dockerfile",
+        "args": {"CADDY_VERSION": caddy_version},
+    }
     return {
         "group": {"default": {"targets": ["caddy"]}},
         "target": {
             "upstream-builder": {
-                **upstream, "target": "source-builder", "tags": ["localhost/caddy-builder"],
+                **upstream, "target": "source-builder", "tags": [builder_image],
             },
             "upstream-runtime": {
-                **upstream, "target": "source-runtime", "tags": ["localhost/caddy-runtime"],
+                **upstream, "target": "source-runtime", "tags": [runtime_image],
             },
             "reference-builder": {**upstream, "target": "reference-builder"},
             "caddy": {
@@ -122,7 +130,7 @@ def bake_config(output, revision):
             "reference": {
                 **application,
                 "contexts": {
-                    **contexts, "localhost/caddy-builder": "target:reference-builder",
+                    **contexts, builder_image: "target:reference-builder",
                 },
                 "tags": ["caddy-upstream:test"],
             },
@@ -163,7 +171,7 @@ def generate(upstream, output, series=None):
     output.mkdir(parents=True, exist_ok=True)
     (output / "Upstream.Dockerfile").write_text(dockerfile)
     (output / "docker-bake.json").write_text(
-        json.dumps(bake_config(output, revision), indent=2) + "\n"
+        json.dumps(bake_config(output, revision, metadata["caddy"][1:]), indent=2) + "\n"
     )
     (output / ".dockerignore").write_text("*\n!Upstream.Dockerfile\n!caddy-builder.sh\n")
     shutil.copy2(builder_path / "caddy-builder.sh", output / "caddy-builder.sh")

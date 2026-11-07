@@ -10,8 +10,10 @@ The Dockerfile remains the small customization layer: it builds Dynu-enabled
 Caddy using a locally built builder, then copies that binary into a locally built
 runtime. [build.py](build.py) prepares upstream base-image stages and a Docker
 Bake dependency graph, not a replacement for the customization Dockerfile.
-Its `FROM` defaults use `localhost/caddy-builder` and `localhost/caddy-runtime`;
-Bake maps those references explicitly to local build targets.
+The Dockerfile retains its original `FROM caddy:${CADDY_VERSION}...` references.
+Bake overrides `CADDY_VERSION` with the pinned upstream version and maps both
+versioned image references explicitly to local build targets. The Dockerfile's
+default version is only a fallback for builds outside this supported Bake path.
 
 The comparison uses the same customization Dockerfile with upstream's release
 xcaddy builder, also built locally, rather than the source xcaddy builder.
@@ -19,8 +21,9 @@ Both targets consume the **same local runtime target** in a single Bake solve.
 Thus cached source layers and a fresh comparison build cannot independently
 resolve different Alpine runtime package versions. The runtime includes
 source-built stock Caddy, replaced by Dynu-enabled Caddy in the final Dockerfile.
-The final binary uses `cap_net_bind_service=ep`, matching the original
-xcaddy-built Dynu binary's effective/permitted capability.
+The local builder supplies the original effective/permitted low-port capability
+through xcaddy's `XCADDY_SETCAP`; the Dockerfile copies it with the binary.
+CI checks that it matches `cap_net_bind_service=ep` in the original image.
 Go/Alpine images and OS packages are still prebuilt; this is not a bootstrap of
 the entire toolchain or an offline build.
 
@@ -49,9 +52,12 @@ To explicitly load the locally built `FROM` images into Docker:
 docker buildx bake --file caddy/.build/docker-bake.json --load upstream-builder upstream-runtime
 ```
 
-These images are tagged `localhost/caddy-builder` and `localhost/caddy-runtime`.
+These images use the original versioned tags, such as `caddy:2.11.9-builder` and
+`caddy:2.11.9`.
 For the final image, prefer Bake's explicit target wiring over relying on a
 particular BuildKit driver to resolve images loaded into the local Docker daemon.
+Running `docker build caddy` without those local images can pull Caddy images
+from Docker Hub; use the Bake commands above to avoid that.
 
 The generated upstream context allows only `Upstream.Dockerfile` and the upstream
 builder helper. The customization context uses `.dockerignore` to allow only the

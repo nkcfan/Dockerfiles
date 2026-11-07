@@ -1,17 +1,10 @@
-# syntax=docker/dockerfile:1
+ARG CADDY_VERSION=2.11.9
+FROM caddy:${CADDY_VERSION}-builder AS builder
 
-ARG CADDY_BUILDER=localhost/caddy-builder
-ARG CADDY_RUNTIME=localhost/caddy-runtime
-FROM ${CADDY_BUILDER} AS builder
-
+ARG CADDY_VERSION
 ARG DYNU_VERSION=v1.0.0
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOTOOLCHAIN=local xcaddy build "${CADDY_VERSION}" \
-    --with "github.com/caddy-dns/dynu@${DYNU_VERSION}" \
-    --output /usr/bin/caddy
-
-FROM ${CADDY_RUNTIME}
+RUN xcaddy build "v${CADDY_VERSION}" \
+    --with "github.com/caddy-dns/dynu@${DYNU_VERSION}"
+FROM caddy:${CADDY_VERSION}
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
-RUN setcap cap_net_bind_service=+ep /usr/bin/caddy
