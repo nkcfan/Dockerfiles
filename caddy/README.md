@@ -10,10 +10,11 @@ The Dockerfile remains the small customization layer: it builds Dynu-enabled
 Caddy using a locally built builder, then copies that binary into a locally built
 runtime. [build.py](build.py) prepares upstream base-image stages and a Docker
 Bake dependency graph, not a replacement for the customization Dockerfile.
-The Dockerfile retains its original `FROM caddy:${CADDY_VERSION}...` references.
-Bake overrides `CADDY_VERSION` with the pinned upstream version and maps both
-versioned image references explicitly to local build targets. The Dockerfile's
-default version is only a fallback for builds outside this supported Bake path.
+The Dockerfile retains the first version's `FROM caddy:builder` and
+`FROM caddy:latest` references, with only the Dynu version pin added.
+Bake maps both image references explicitly to local build targets.
+Although these aliases are unversioned, xcaddy inherits the pinned upstream
+builder's `CADDY_VERSION`; it does not select the latest Caddy release.
 
 The comparison uses the same customization Dockerfile with upstream's release
 xcaddy builder, also built locally, rather than the source xcaddy builder.
@@ -52,8 +53,7 @@ To explicitly load the locally built `FROM` images into Docker:
 docker buildx bake --file caddy/.build/docker-bake.json --load upstream-builder upstream-runtime
 ```
 
-These images use the original versioned tags, such as `caddy:2.11.9-builder` and
-`caddy:2.11.9`.
+These images use the original aliases, `caddy:builder` and `caddy:latest`.
 For the final image, prefer Bake's explicit target wiring over relying on a
 particular BuildKit driver to resolve images loaded into the local Docker daemon.
 Running `docker build caddy` without those local images can pull Caddy images

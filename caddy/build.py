@@ -73,9 +73,7 @@ def transform(builder, runtime):
         ),
     )
     runtime_common = replace_install(runtime, "alpine", caddy, lambda block: "")
-    builder_environment = (
-        f"\nENV CADDY_VERSION={caddy[1:]} CGO_ENABLED=0 GOTOOLCHAIN=local\n"
-    )
+    builder_environment = "\nENV CGO_ENABLED=0 GOTOOLCHAIN=local\n"
     result = (
         "# syntax=docker/dockerfile:1\n\n"
         + source_builder.replace("\n", " AS source-builder\n", 1)
@@ -83,7 +81,7 @@ def transform(builder, runtime):
         + "FROM source-builder AS stock-caddy\n"
         + "RUN --mount=type=cache,target=/go/pkg/mod \\\n"
         + "    --mount=type=cache,target=/root/.cache/go-build \\\n"
-        + '    xcaddy build "v${CADDY_VERSION}" '
+        + '    xcaddy build "${CADDY_VERSION}" '
         + "--output /usr/bin/caddy\n\n"
         + runtime_common.replace("\n", " AS runtime-common\n", 1)
         + "\n"
@@ -98,9 +96,9 @@ def transform(builder, runtime):
     return result, {"caddy": caddy, "xcaddy": xcaddy}
 
 
-def bake_config(output, revision, caddy_version):
-    builder_image = f"caddy:{caddy_version}-builder"
-    runtime_image = f"caddy:{caddy_version}"
+def bake_config(output, revision):
+    builder_image = "caddy:builder"
+    runtime_image = "caddy:latest"
     upstream = {
         "context": str(output.resolve()),
         "dockerfile": "Upstream.Dockerfile",
@@ -111,7 +109,6 @@ def bake_config(output, revision, caddy_version):
     }
     application = {
         "context": str(ROOT), "dockerfile": "Dockerfile",
-        "args": {"CADDY_VERSION": caddy_version},
     }
     return {
         "group": {"default": {"targets": ["caddy"]}},
@@ -171,7 +168,7 @@ def generate(upstream, output, series=None):
     output.mkdir(parents=True, exist_ok=True)
     (output / "Upstream.Dockerfile").write_text(dockerfile)
     (output / "docker-bake.json").write_text(
-        json.dumps(bake_config(output, revision, metadata["caddy"][1:]), indent=2) + "\n"
+        json.dumps(bake_config(output, revision), indent=2) + "\n"
     )
     (output / ".dockerignore").write_text("*\n!Upstream.Dockerfile\n!caddy-builder.sh\n")
     shutil.copy2(builder_path / "caddy-builder.sh", output / "caddy-builder.sh")

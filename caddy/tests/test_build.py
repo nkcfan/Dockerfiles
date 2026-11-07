@@ -26,7 +26,7 @@ class SourceBuildTests(unittest.TestCase):
     def test_source_compilation_and_runtime_preservation(self):
         result, metadata = build.transform(self.builder, self.runtime)
         self.assertIn('go install github.com/caddyserver/xcaddy/cmd/xcaddy@"', result)
-        self.assertIn('xcaddy build "v${CADDY_VERSION}"', result)
+        self.assertIn('xcaddy build "${CADDY_VERSION}"', result)
         self.assertIn("CGO_ENABLED=0 GOTOOLCHAIN=local", result)
         source, reference = result.split("\nFROM golang:", 2)[1:]
         self.assertNotIn("/releases/download/", source)
@@ -95,8 +95,10 @@ class SourceBuildTests(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text()
         pin = build.version(dockerfile, "DYNU_VERSION", "ARG")
         self.assertIn('--with "github.com/caddy-dns/dynu@${DYNU_VERSION}"', dockerfile)
-        self.assertIn("FROM caddy:${CADDY_VERSION}-builder AS builder", dockerfile)
-        self.assertIn('RUN xcaddy build "v${CADDY_VERSION}"', dockerfile)
+        self.assertIn("FROM caddy:builder AS builder", dockerfile)
+        self.assertIn("FROM caddy:latest", dockerfile)
+        self.assertIn("RUN xcaddy build \\\n", dockerfile)
+        self.assertNotIn("ARG CADDY_VERSION", dockerfile)
         self.assertEqual(
             build.version(dockerfile.replace(pin, "v9.8.7"), "DYNU_VERSION", "ARG"),
             "v9.8.7",
@@ -128,10 +130,9 @@ class SourceBuildTests(unittest.TestCase):
             )
             self.assertEqual(source["context"], str(ROOT))
             self.assertEqual(source["dockerfile"], "Dockerfile")
-            caddy_version = metadata["caddy"][1:]
-            builder_image = f"caddy:{caddy_version}-builder"
-            runtime_image = f"caddy:{caddy_version}"
-            self.assertEqual(source["args"]["CADDY_VERSION"], caddy_version)
+            builder_image = "caddy:builder"
+            runtime_image = "caddy:latest"
+            self.assertNotIn("args", source)
             self.assertEqual(
                 source["contexts"][builder_image], "target:upstream-builder"
             )
@@ -146,13 +147,22 @@ class SourceBuildTests(unittest.TestCase):
             self.assertEqual((output / ".dockerignore").read_text(),
                              "*\n!Upstream.Dockerfile\n!caddy-builder.sh\n")
 
-    def test_bake_version_override_does_not_follow_dockerfile_default(self):
-        config = build.bake_config(ROOT / ".build", "revision", "99.1.2")
+    def test_unversioned_aliases_keep_upstream_caddy_version(self):
+        caddy = build.version(self.runtime, "CADDY_VERSION")
+        builder = self.builder.replace(caddy, "v99.1.2").replace(caddy[1:], "99.1.2")
+        runtime = self.runtime.replace(caddy, "v99.1.2").replace(caddy[1:], "99.1.2")
+        result, metadata = build.transform(builder, runtime)
+        self.assertEqual(metadata["caddy"], "v99.1.2")
+        source, reference = result.split("\nFROM golang:", 2)[1:]
+        for stage in (source, reference):
+            self.assertIn("ENV CADDY_VERSION=v99.1.2\n", stage)
+            self.assertNotIn("ENV CADDY_VERSION=99.1.2", stage)
+        config = build.bake_config(ROOT / ".build", "revision")
         target = config["target"]["caddy"]
-        self.assertEqual(target["args"], {"CADDY_VERSION": "99.1.2"})
+        self.assertNotIn("args", target)
         self.assertEqual(target["contexts"], {
-            "caddy:99.1.2-builder": "target:upstream-builder",
-            "caddy:99.1.2": "target:upstream-runtime",
+            "caddy:builder": "target:upstream-builder",
+            "caddy:latest": "target:upstream-runtime",
         })
 
     def test_ambiguous_series_is_rejected(self):
