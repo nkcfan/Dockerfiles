@@ -49,6 +49,7 @@ jobs:
       - name: Build local base images and both Dynu images with Bake
         uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7
         with:
+          source: .
           files: caddy/.build/docker-bake.json
           load: true
           targets: |
