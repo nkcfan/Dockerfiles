@@ -1,20 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
-  "enabledManagers": ["custom.regex", "github-actions"],
+  "enabledManagers": ["custom.regex", "github-actions", "git-submodules"],
+  "git-submodules": {
+    "enabled": true
+  },
   "automerge": true,
   "ignoreUnstable": true,
   "customManagers": [
-    {
-      "customType": "regex",
-      "managerFilePatterns": ["/^caddy\\/Dockerfile$/"],
-      "matchStrings": [
-        "(?:^|\\n)ARG CADDY_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)(?:\\r?\\n|$)"
-      ],
-      "depNameTemplate": "caddy",
-      "datasourceTemplate": "docker",
-      "versioningTemplate": "docker"
-    },
     {
       "customType": "regex",
       "managerFilePatterns": ["/^caddy\\/Dockerfile$/"],
@@ -38,15 +31,11 @@
   ],
   "packageRules": [
     {
-      "matchPackageNames": ["caddy"],
-      "allowedVersions": "/^[0-9]+\\.[0-9]+\\.[0-9]+$/"
-    },
-    {
       "matchPackageNames": ["caddy-dns/dynu"],
       "allowedVersions": "/^v[0-9]+\\.[0-9]+\\.[0-9]+$/"
     },
     {
-      "matchPackageNames": ["caddy", "caddy-dns/dynu"],
+      "matchPackageNames": ["caddy-dns/dynu"],
       "groupName": "Caddy runtime dependencies"
     },
     {

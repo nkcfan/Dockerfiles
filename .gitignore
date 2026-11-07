@@ -5,3 +5,6 @@
 caddy/caddy-config/
 caddy/caddy-data/
 lazydocker/config/
+caddy/.build/
+caddy/__pycache__/
+caddy/tests/__pycache__/
