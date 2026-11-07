@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a source-only build while preserving upstream runtime packaging."""
+"""Build upstream base images locally for the checked-in Caddy Dockerfile."""
 
 import argparse
 import hashlib
@@ -11,15 +11,16 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parent
-DYNU_VERSION = "v1.0.0"
 INSTALL_HASHES = {
     "alpine": "6a61f42f65db0bb24edd3340967990059670995f0942bd5db07bd9ad1579f6da",
     "builder": "3e09052b5bcb9e84357e91cfbd59a24dd92dc0f826e304c93a3105bfc8cd5a84",
 }
 
 
-def version(text, name):
-    matches = re.findall(r"^ENV " + name + r"=(v\d+\.\d+\.\d+)$", text, re.MULTILINE)
+def version(text, name, instruction="ENV"):
+    matches = re.findall(
+        r"^" + instruction + " " + name + r"=(v\d+\.\d+\.\d+)$", text, re.MULTILINE
+    )
     if len(matches) != 1:
         raise ValueError(f"Expected one pinned stable {name} declaration")
     return matches[0]
@@ -47,15 +48,6 @@ def replace_install(text, variant, release, replacement):
     return text[:start] + replacement(block) + text[end:]
 
 
-def caddy_command():
-    if not re.fullmatch(r"v\d+\.\d+\.\d+", DYNU_VERSION):
-        raise ValueError("Expected one pinned stable DYNU_VERSION")
-    return (
-        'CGO_ENABLED=0 GOTOOLCHAIN=local xcaddy build "${CADDY_VERSION}" '
-        f'--with "github.com/caddy-dns/dynu@{DYNU_VERSION}" --output /usr/bin/caddy'
-    )
-
-
 def transform(builder, runtime):
     caddy = version(runtime, "CADDY_VERSION")
     xcaddy = version(builder, "XCADDY_VERSION")
@@ -68,7 +60,7 @@ def transform(builder, runtime):
     if len(re.findall(r"^FROM ", builder + runtime, re.MULTILINE)) != 2:
         raise ValueError("Unexpected additional upstream build stages")
 
-    builder = replace_install(
+    source_builder = replace_install(
         builder,
         "builder",
         xcaddy,
@@ -77,28 +69,65 @@ def transform(builder, runtime):
             "    --mount=type=cache,target=/root/.cache/go-build \\\n"
             "    set -eux; \\\n"
             "    GOTOOLCHAIN=local GOBIN=/usr/bin go install "
-            'github.com/caddyserver/xcaddy/cmd/xcaddy@"${XCADDY_VERSION}"; \\\n'
-            f"    {caddy_command()}; \\\n"
-            "    caddy version"
+            'github.com/caddyserver/xcaddy/cmd/xcaddy@"${XCADDY_VERSION}"'
         ),
     )
-    builder = builder.replace("\n", " AS source-builder\n", 1)
+    runtime_common = replace_install(runtime, "alpine", caddy, lambda block: "")
+    result = (
+        "# syntax=docker/dockerfile:1\n\n"
+        + source_builder.replace("\n", " AS source-builder\n", 1)
+        + "\n"
+        + "FROM source-builder AS stock-caddy\n"
+        + "RUN --mount=type=cache,target=/go/pkg/mod \\\n"
+        + "    --mount=type=cache,target=/root/.cache/go-build \\\n"
+        + '    CGO_ENABLED=0 GOTOOLCHAIN=local xcaddy build "${CADDY_VERSION}" '
+        + "--output /usr/bin/caddy\n\n"
+        + runtime_common.replace("\n", " AS runtime-common\n", 1)
+        + "\n"
+        + "FROM runtime-common AS source-runtime\n"
+        + "COPY --from=stock-caddy /usr/bin/caddy /usr/bin/caddy\n"
+        + "RUN setcap cap_net_bind_service=+p /usr/bin/caddy && caddy version\n\n"
+    )
+    if "/releases/download/" in result:
+        raise ValueError("Unexpected release binary download remains in source stages")
+    # BuildKit visits this release-binary stage only for the comparison target.
+    result += builder.replace("\n", " AS reference-builder\n", 1)
+    return result, {"caddy": caddy, "xcaddy": xcaddy}
 
-    def runtime_install(block):
-        # The original xcaddy-built Dynu binary carries the effective capability.
-        tail = block[block.index("\tsetcap cap_net_bind_service="):].replace(
-            "cap_net_bind_service=+p", "cap_net_bind_service=+ep"
-        )
-        return (
-            "COPY --from=source-builder /usr/bin/caddy /usr/bin/caddy\n\n"
-            "RUN set -eux; \\\n" + tail
-        )
 
-    runtime = replace_install(runtime, "alpine", caddy, runtime_install)
-    result = "# syntax=docker/dockerfile:1\n\n" + builder + "\n" + runtime
-    if "/releases/download/" in result or "/tmp/xcaddy.tar.gz" in result:
-        raise ValueError("Unexpected release binary download remains")
-    return result, {"caddy": caddy, "xcaddy": xcaddy, "dynu": DYNU_VERSION}
+def bake_config(output, revision):
+    upstream = {
+        "context": str(output.resolve()),
+        "dockerfile": "Upstream.Dockerfile",
+    }
+    contexts = {
+        "localhost/caddy-builder": "target:upstream-builder",
+        "localhost/caddy-runtime": "target:upstream-runtime",
+    }
+    application = {"context": str(ROOT), "dockerfile": "Dockerfile"}
+    return {
+        "group": {"default": {"targets": ["caddy"]}},
+        "target": {
+            "upstream-builder": {
+                **upstream, "target": "source-builder", "tags": ["localhost/caddy-builder"],
+            },
+            "upstream-runtime": {
+                **upstream, "target": "source-runtime", "tags": ["localhost/caddy-runtime"],
+            },
+            "reference-builder": {**upstream, "target": "reference-builder"},
+            "caddy": {
+                **application, "contexts": contexts, "tags": ["caddy-source:test"],
+                "labels": {"io.caddy-source.upstream-revision": revision},
+            },
+            "reference": {
+                **application,
+                "contexts": {
+                    **contexts, "localhost/caddy-builder": "target:reference-builder",
+                },
+                "tags": ["caddy-upstream:test"],
+            },
+        },
+    }
 
 
 def generate(upstream, output, series=None):
@@ -117,13 +146,7 @@ def generate(upstream, output, series=None):
     builder = (builder_path / "Dockerfile").read_text()
     runtime = runtime_path.read_text()
     dockerfile, metadata = transform(builder, runtime)
-    baseline = (
-        builder.replace("\n", " AS reference-builder\n", 1)
-        + f"\nRUN {caddy_command()}\n\n"
-        + runtime
-        + "\nCOPY --from=reference-builder /usr/bin/caddy /usr/bin/caddy\n"
-        + "RUN setcap cap_net_bind_service=+ep /usr/bin/caddy\n"
-    )
+    metadata["dynu"] = version((ROOT / "Dockerfile").read_text(), "DYNU_VERSION", "ARG")
     subprocess.run(
         ["git", "-C", str(upstream), "diff", "--exit-code", "HEAD", "--"],
         check=True,
@@ -137,10 +160,12 @@ def generate(upstream, output, series=None):
         upstream_revision=revision,
         series=runtime_path.parent.parent.name,
     )
-    dockerfile += f'\nLABEL io.caddy-source.upstream-revision="{revision}"\n'
     output.mkdir(parents=True, exist_ok=True)
-    (output / "Dockerfile").write_text(dockerfile)
-    (output / "Baseline.Dockerfile").write_text(baseline)
+    (output / "Upstream.Dockerfile").write_text(dockerfile)
+    (output / "docker-bake.json").write_text(
+        json.dumps(bake_config(output, revision), indent=2) + "\n"
+    )
+    (output / ".dockerignore").write_text("*\n!Upstream.Dockerfile\n!caddy-builder.sh\n")
     shutil.copy2(builder_path / "caddy-builder.sh", output / "caddy-builder.sh")
     (output / "versions.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(json.dumps(metadata))

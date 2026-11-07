@@ -4,7 +4,6 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,18 +27,22 @@ class SourceBuildTests(unittest.TestCase):
         result, metadata = build.transform(self.builder, self.runtime)
         self.assertIn('go install github.com/caddyserver/xcaddy/cmd/xcaddy@"', result)
         self.assertIn('xcaddy build "${CADDY_VERSION}"', result)
-        self.assertIn(f'--with "github.com/caddy-dns/dynu@{build.DYNU_VERSION}"', result)
-        self.assertNotIn("/releases/download/", result)
+        source, reference = result.split("\nFROM golang:", 2)[1:]
+        self.assertNotIn("/releases/download/", source)
+        self.assertIn("/releases/download/", reference)
         self.assertNotIn("FROM caddy", result)
-        runtime = result.split("\nFROM alpine:", 1)[1]
+        runtime = source.split("\nFROM alpine:", 1)[1]
         original = self.runtime.split("\n\n")
-        generated = ("FROM alpine:" + runtime).split("\n\n")
+        generated = ("FROM alpine:" + runtime).replace(
+            " AS runtime-common", "", 1
+        ).split("\n\n")
         for block in original:
             if '\tapkArch=' not in block:
-                self.assertIn(block, generated)
+                self.assertIn(block.rstrip("\n"), [item.rstrip("\n") for item in generated])
         self.assertIn(
-            "COPY --from=source-builder /usr/bin/caddy /usr/bin/caddy\n\n"
-            "RUN set -eux; \\\n\tsetcap cap_net_bind_service=+ep /usr/bin/caddy;",
+            "FROM runtime-common AS source-runtime\n"
+            "COPY --from=stock-caddy /usr/bin/caddy /usr/bin/caddy\n"
+            "RUN setcap cap_net_bind_service=+p /usr/bin/caddy",
             result,
         )
         self.assertNotIn("go install", runtime)
@@ -56,7 +59,7 @@ class SourceBuildTests(unittest.TestCase):
         _, metadata = build.transform(builder, runtime)
         self.assertEqual(
             metadata,
-            {"caddy": "v99.1.2", "xcaddy": "v9.1.2", "dynu": build.DYNU_VERSION},
+            {"caddy": "v99.1.2", "xcaddy": "v9.1.2"},
         )
 
     def test_installation_changes_fail_closed(self):
@@ -87,14 +90,17 @@ class SourceBuildTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pinned stable"):
             build.transform(self.builder, runtime)
 
-    def test_dynu_updates_are_pinned_in_command_and_metadata(self):
-        with patch.object(build, "DYNU_VERSION", "v9.8.7"):
-            result, metadata = build.transform(self.builder, self.runtime)
-        self.assertIn('--with "github.com/caddy-dns/dynu@v9.8.7"', result)
-        self.assertEqual(metadata["dynu"], "v9.8.7")
-        with patch.object(build, "DYNU_VERSION", "latest"):
-            with self.assertRaisesRegex(ValueError, "pinned stable DYNU_VERSION"):
-                build.transform(self.builder, self.runtime)
+    def test_dynu_pin_is_owned_by_checked_in_dockerfile(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        pin = build.version(dockerfile, "DYNU_VERSION", "ARG")
+        self.assertIn('--with "github.com/caddy-dns/dynu@${DYNU_VERSION}"', dockerfile)
+        self.assertIn("RUN setcap cap_net_bind_service=+ep /usr/bin/caddy", dockerfile)
+        self.assertEqual(
+            build.version(dockerfile.replace(pin, "v9.8.7"), "DYNU_VERSION", "ARG"),
+            "v9.8.7",
+        )
+        with self.assertRaisesRegex(ValueError, "pinned stable"):
+            build.version(dockerfile.replace(pin, "latest"), "DYNU_VERSION", "ARG")
 
     def test_extra_stages_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "additional upstream build stages"):
@@ -106,16 +112,33 @@ class SourceBuildTests(unittest.TestCase):
             build.generate(ROOT / "upstream", output)
             self.assertEqual(
                 {path.name for path in output.iterdir()},
-                {"Dockerfile", "Baseline.Dockerfile", "caddy-builder.sh", "versions.json"},
+                {".dockerignore", "Upstream.Dockerfile", "docker-bake.json",
+                 "caddy-builder.sh", "versions.json"},
             )
             metadata = json.loads((output / "versions.json").read_text())
             self.assertRegex(metadata["upstream_revision"], r"^[0-9a-f]{40}$")
-            self.assertIn(metadata["upstream_revision"], (output / "Dockerfile").read_text())
-            baseline = (output / "Baseline.Dockerfile").read_text()
-            self.assertIn("/releases/download/", baseline)
-            self.assertNotIn("FROM caddy:", baseline)
-            self.assertIn(f'--with "github.com/caddy-dns/dynu@{build.DYNU_VERSION}"', baseline)
-            self.assertIn("RUN setcap cap_net_bind_service=+ep /usr/bin/caddy", baseline)
+            bake = json.loads((output / "docker-bake.json").read_text())
+            source = bake["target"]["caddy"]
+            reference = bake["target"]["reference"]
+            self.assertEqual(
+                source["labels"]["io.caddy-source.upstream-revision"],
+                metadata["upstream_revision"],
+            )
+            self.assertEqual(source["context"], str(ROOT))
+            self.assertEqual(source["dockerfile"], "Dockerfile")
+            self.assertEqual(
+                source["contexts"]["localhost/caddy-builder"], "target:upstream-builder"
+            )
+            self.assertEqual(
+                reference["contexts"]["localhost/caddy-builder"], "target:reference-builder"
+            )
+            self.assertEqual(
+                source["contexts"]["localhost/caddy-runtime"],
+                reference["contexts"]["localhost/caddy-runtime"],
+            )
+            self.assertEqual(bake["target"]["upstream-runtime"]["target"], "source-runtime")
+            self.assertEqual((output / ".dockerignore").read_text(),
+                             "*\n!Upstream.Dockerfile\n!caddy-builder.sh\n")
 
     def test_ambiguous_series_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

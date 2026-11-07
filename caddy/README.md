@@ -4,21 +4,29 @@ This integration never pulls a Caddy Docker Hub image. It compiles both xcaddy
 and Caddy from source, using versions and Go/Alpine bases selected by the pinned
 [upstream packaging](https://github.com/caddyserver/caddy-docker) submodule.
 Only Caddy (including the Dynu DNS provider) and upstream's runtime payload enter
-the final stage. The Dynu version is pinned in `build.py`.
+the final stage. The Dynu version is pinned in the checked-in [Dockerfile](Dockerfile).
 
-The compatibility baseline recreates the previous Dynu-enabled build using
-upstream Dockerfiles at the recorded submodule commit. It uses upstream's
-release xcaddy binary to compile Caddy with the same pinned Dynu module.
-Unlike the previous binary-overlay Dockerfile, both builds explicitly restore
-the Caddy binary's low-port capability after copying it into the final stage.
-They use `cap_net_bind_service=ep`, matching the original xcaddy-built Dynu
-binary's effective/permitted capability rather than the standard runtime's `p`.
+The Dockerfile remains the small customization layer: it builds Dynu-enabled
+Caddy using a locally built builder, then copies that binary into a locally built
+runtime. [build.py](build.py) prepares upstream base-image stages and a Docker
+Bake dependency graph, not a replacement for the customization Dockerfile.
+Its `FROM` defaults use `localhost/caddy-builder` and `localhost/caddy-runtime`;
+Bake maps those references explicitly to local build targets.
+
+The comparison uses the same customization Dockerfile with upstream's release
+xcaddy builder, also built locally, rather than the source xcaddy builder.
+Both targets consume the **same local runtime target** in a single Bake solve.
+Thus cached source layers and a fresh comparison build cannot independently
+resolve different Alpine runtime package versions. The runtime includes
+source-built stock Caddy, replaced by Dynu-enabled Caddy in the final Dockerfile.
+The final binary uses `cap_net_bind_service=ep`, matching the original
+xcaddy-built Dynu binary's effective/permitted capability.
 Go/Alpine images and OS packages are still prebuilt; this is not a bootstrap of
 the entire toolchain or an offline build.
 
 ## Local build and verification
 
-Requirements: Git, Python 3.9+, Docker with BuildKit, and network access to base
+Requirements: Git, Python 3.9+, Docker Buildx with Bake, and network access to base
 images, Alpine packages, GitHub assets, and Go module sources.
 Run from the repository root:
 
@@ -26,26 +34,36 @@ Run from the repository root:
 git submodule update --init --recursive
 python3 -m unittest discover -s caddy/tests -v
 python3 caddy/build.py
-docker build --tag caddy-source:test caddy/.build
-docker build --file caddy/.build/Baseline.Dockerfile \
-  --tag caddy-upstream:test caddy/.build
+docker buildx bake --file caddy/.build/docker-bake.json --load caddy reference
 python3 caddy/test_image.py
 ```
 
-The verification baseline downloads official release binaries from GitHub,
-not Docker Hub. Those binaries are used only in the comparison image, never in
-the generated source-build image.
+For just the production image, select `caddy` instead of `caddy reference`.
+The `reference-builder` stage downloads release xcaddy from GitHub only when
+the comparison target is requested. BuildKit skips that stage for production.
+The source targets never depend on a release Caddy or xcaddy binary.
 
-The generated build context contains only the source and baseline Dockerfiles,
-upstream builder helper, and version metadata. It never includes credentials,
-deployment configuration, or runtime data from the surrounding directory.
-Generated files stay in the ignored `.build/` directory. The old hand-maintained
-Dockerfile is replaced by this generation step; build from `caddy/.build`, not `caddy`.
+To explicitly load the locally built `FROM` images into Docker:
+
+```sh
+docker buildx bake --file caddy/.build/docker-bake.json --load upstream-builder upstream-runtime
+```
+
+These images are tagged `localhost/caddy-builder` and `localhost/caddy-runtime`.
+For the final image, prefer Bake's explicit target wiring over relying on a
+particular BuildKit driver to resolve images loaded into the local Docker daemon.
+
+The generated upstream context allows only `Upstream.Dockerfile` and the upstream
+builder helper. The customization context uses `.dockerignore` to allow only the
+checked-in Dockerfile. Neither sends credentials, deployment files, or runtime
+data to Docker. Generated stages, Bake configuration, and metadata stay in the
+ignored `.build/` directory.
 The source stage uses `CGO_ENABLED=0` and the selected Go toolchain; it does not
 silently download a newer Go toolchain.
 
-The generator preserves upstream runtime setup and replaces only the two release
-installation blocks. Their fingerprints normalize version strings and SHA-512
+The generator preserves upstream runtime setup and replaces the release
+installation blocks with source compilation/local copies. Their fingerprints
+normalize version strings and SHA-512
 checksums, allowing routine releases without patch churn. Other changes to these
 blocks fail generation and require review. Permissions and file capabilities are
 applied in the final stage after the binary is copied.
@@ -94,10 +112,10 @@ upstream `master` branch and proposes changes to the recorded submodule commit.
 It does not directly watch Caddy releases, so it follows upstream packaging's timing.
 
 Protect the default branch and require the existing `image-checks` gate.
-Automerge is disabled initially for the Caddy packaging submodule only; existing
-Dynu, LazyDocker, and action update policies are retained. To make packaging
-updates unattended, enable it for that submodule after required checks and merge
-permissions are configured. Renovate does not fix integration incompatibilities.
+The Caddy packaging submodule inherits the repository's enabled automerge policy,
+alongside Dynu, LazyDocker, and action updates. Configure required checks, GitHub
+auto-merge, and any required approvals so passing updates can merge unattended.
+Failed checks must block merging. Renovate does not fix integration incompatibilities.
 
 Normal builds must **not** use `git submodule update --remote`.
 To deliberately update manually:
